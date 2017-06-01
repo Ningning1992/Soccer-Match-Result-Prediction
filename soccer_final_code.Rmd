@@ -1,0 +1,1337 @@
+---
+title: "Appendix: code"
+output: pdf_document
+date: "5/1/2017"
+---
+
+
+Change the working directory and get the required packages
+```{r}
+setwd('/Users/ningning/Documents/stat222/data and code')
+library(ggplot2)
+library('RSQLite')
+library(dplyr)
+library(nnet)
+library(glmnet)
+library(data.table)
+library(caret)
+library(randomForest)
+```
+
+
+Connect to the sqlite database
+```{r}
+con <- dbConnect(drv=RSQLite::SQLite(), dbname='database.sqlite')
+tables <- dbListTables(con)
+lDataFrames <- vector('list', length=length(tables))
+```
+
+
+Read and convert sqlite tables to a regular dataset
+```{r}
+for (i in seq(along=tables)) {
+  lDataFrames[[i]] <- dbGetQuery(conn=con, statement=paste('SELECT * FROM ', tables[[i]], sep=''))
+}
+
+
+Country <- lDataFrames[[1]]
+League <- lDataFrames[[2]]
+Match <- lDataFrames[[3]]
+Player <- lDataFrames[[4]]
+Player_attributes <- lDataFrames[[5]]
+Team <- lDataFrames[[6]]
+Team_attributes <- lDataFrames[[7]]
+```
+
+
+Extract only relevant columns in Match table
+```{r}
+Match <- Match[,c(2,4,5,6,8,9, 10, 11)]
+
+```
+
+
+
+Match sorted by home team and date, and then split match by season:
+Match_season[[1]] = 08/09 ... Match_season[[8]] = 15/16
+```{r}
+Match <- Match[order(Match$home_team_api_id, Match$date),]
+Match_season <- split(Match, f = Match$season)
+```
+
+
+Trying to retrieve league position
+```{r}
+
+# df is a data frame splitted by season and country then ordered by date
+lp <- function(df){
+  dat_lp <- NULL
+  df <- df[order(df$date),]
+  df$result <- ifelse(df$home_team_goal-df$away_team_goal > 0, 1, 
+                   ifelse(df$home_team_goal-df$away_team_goal < 0, -1, 0))
+  teams <- unique(df$home_team_api_id)
+  num_weeks <- max(df$stage)
+  week <- rep(1:num_weeks,each = length(teams))
+  points <- 0
+  standings <- 1
+  country <- rep(df[1,'country_id'], length(week))
+  temp <- data.frame(country, teams, week, points, standings)
+  league_position <- split(temp, f = week)
+  d_league <- split(df, f = df$stage)
+
+  for(w in 1:num_weeks){
+    for(i in 1:length(teams)){
+      home_or_away <- which(grepl(league_position[[w]][i, 'teams'], d_league[[w]]))
+      index_home <- which(league_position[[w]][i, 'teams'] == d_league[[w]]$home_team_api_id)
+      index_away <- which(league_position[[w]][i, 'teams'] == d_league[[w]]$away_team_api_id)
+      if(length(home_or_away) == 0)
+        home_or_away <- 0
+      if(home_or_away == 5){
+        league_position[[w]][i, 'points'] <- ifelse(d_league[[w]][index_home, 'result'] == 1, 3, 
+                                           ifelse(d_league[[w]][index_home, 'result'] == 0, 1, 0))
+      }
+      else if(home_or_away == 6){
+        league_position[[w]][i, 'points'] <- ifelse(d_league[[w]][index_away, 'result'] == 1, 0, 
+                                          ifelse(d_league[[w]][index_away, 'result'] == 0, 1, 3))
+      }
+      else{
+          league_position[[w]][i, 'points'] <- 0
+      }
+    }
+    league_position[[w]]$cum_points <- league_position[[w]]$points
+  }
+  
+
+
+  for(w in 2:num_weeks){
+    league_position[[w]][, 'cum_points'] <- 
+      league_position[[w]][, 'cum_points'] + league_position[[w-1]][, 'cum_points']
+  }
+  
+  
+  for(w in 1:num_weeks){
+    DT <- as.data.table(league_position[[w]])
+    DT <- DT[,standings:=rank(-cum_points,ties.method="first")]
+  
+    dat_lp <- rbind(dat_lp, DT)
+  }
+  
+  dat_lp$prev.standings <- 1
+  index <- length(teams)
+  index2 <- length(teams)+1
+  dat_lp <- dat_lp[order(dat_lp$week, dat_lp$teams), ]
+
+  for(i in index2:nrow(dat_lp)){
+    dat_lp[i, 'prev.standings'] <- dat_lp[i-index, 'standings']
+  }
+  
+  return(dat_lp)
+}
+
+```  
+
+
+Create league position for each season by each country
+```{r}
+temp <- split(Match_season[[1]], f = Match_season[[1]]$country_id)
+
+lp_0809_1 <- lp(temp[[1]])
+lp_0809_1729 <- lp(temp[[2]])
+lp_0809_4769 <- lp(temp[[3]])
+lp_0809_7809 <- lp(temp[[4]])
+lp_0809_10257 <- lp(temp[[5]])
+lp_0809_13274 <- lp(temp[[6]])
+lp_0809_15722 <- lp(temp[[7]])
+lp_0809_17642 <- lp(temp[[8]])
+lp_0809_19694 <- lp(temp[[9]])
+lp_0809_21518 <- lp(temp[[10]])
+lp_0809_24558 <- lp(temp[[11]])
+lp_0809 <- rbind(lp_0809_1, lp_0809_1729, lp_0809_4769, lp_0809_7809, lp_0809_10257, 
+        lp_0809_13274, lp_0809_15722, lp_0809_17642, lp_0809_19694, lp_0809_21518, lp_0809_24558)
+
+temp <- split(Match_season[[2]], f = Match_season[[2]]$country_id)
+lp_0910_1 <- lp(temp[[1]])
+lp_0910_1729 <- lp(temp[[2]])
+lp_0910_4769 <- lp(temp[[3]])
+lp_0910_7809 <- lp(temp[[4]])
+lp_0910_10257 <- lp(temp[[5]])
+lp_0910_13274 <- lp(temp[[6]])
+lp_0910_15722 <- lp(temp[[7]])
+lp_0910_17642 <- lp(temp[[8]])
+lp_0910_19694 <- lp(temp[[9]])
+lp_0910_21518 <- lp(temp[[10]])
+lp_0910_24558 <- lp(temp[[11]])
+
+lp_0910 <- rbind(lp_0910_1, lp_0910_1729, lp_0910_4769, lp_0910_7809, lp_0910_10257, 
+        lp_0910_13274, lp_0910_15722, lp_0910_17642, lp_0910_19694, lp_0910_21518, lp_0910_24558)
+
+temp <- split(Match_season[[3]], f = Match_season[[3]]$country_id)
+
+lp_1011_1 <- lp(temp[[1]])
+lp_1011_1729 <- lp(temp[[2]])
+lp_1011_4769 <- lp(temp[[3]])
+lp_1011_7809 <- lp(temp[[4]])
+lp_1011_10257 <- lp(temp[[5]])
+lp_1011_13274 <- lp(temp[[6]])
+lp_1011_15722 <- lp(temp[[7]])
+lp_1011_17642 <- lp(temp[[8]])
+lp_1011_19694 <- lp(temp[[9]])
+lp_1011_21518 <- lp(temp[[10]])
+lp_1011_24558 <- lp(temp[[11]])
+
+lp_1011 <- rbind(lp_1011_1, lp_1011_1729, lp_1011_4769, lp_1011_7809, lp_1011_10257, 
+                 lp_1011_13274, lp_1011_15722, lp_1011_17642, lp_1011_19694, lp_1011_21518,
+                 lp_1011_24558)
+
+temp <- split(Match_season[[4]], f = Match_season[[4]]$country_id)
+
+lp_1112 <- rbind(lp(temp[[1]]), lp(temp[[2]]), lp(temp[[3]]), lp(temp[[4]]), lp(temp[[5]]), 
+      lp(temp[[6]]), lp(temp[[7]]), lp(temp[[8]]), lp(temp[[9]]), lp(temp[[10]]), lp(temp[[11]]))
+
+temp <- split(Match_season[[5]], f = Match_season[[5]]$country_id)
+
+lp_1213 <- rbind(lp(temp[[1]]), lp(temp[[2]]), lp(temp[[3]]), lp(temp[[4]]), lp(temp[[5]]), 
+    lp(temp[[6]]), lp(temp[[7]]), lp(temp[[8]]), lp(temp[[9]]), lp(temp[[10]]), lp(temp[[11]]))
+
+temp <- split(Match_season[[6]], f = Match_season[[6]]$country_id)
+
+lp_1314 <- rbind(lp(temp[[1]]), lp(temp[[2]]), lp(temp[[3]]), lp(temp[[4]]), lp(temp[[5]]), 
+    lp(temp[[6]]), lp(temp[[7]]), lp(temp[[8]]), lp(temp[[9]]), lp(temp[[10]]), lp(temp[[11]]))
+
+
+temp <- split(Match_season[[7]], f = Match_season[[7]]$country_id)
+
+lp_1415 <- rbind(lp(temp[[1]]), lp(temp[[2]]), lp(temp[[3]]), lp(temp[[4]]), lp(temp[[5]]), 
+    lp(temp[[6]]), lp(temp[[7]]), lp(temp[[8]]), lp(temp[[9]]), lp(temp[[10]]), lp(temp[[11]]))
+
+temp <- split(Match_season[[8]], f = Match_season[[8]]$country_id)
+
+lp_1516 <- rbind(lp(temp[[1]]), lp(temp[[2]]), lp(temp[[3]]), lp(temp[[4]]), lp(temp[[5]]), 
+    lp(temp[[6]]), lp(temp[[7]]), lp(temp[[8]]), lp(temp[[9]]), lp(temp[[10]]), lp(temp[[11]]))
+
+
+```
+
+
+split each season by home team
+```{r}
+# function to split each season by home team
+split_by_hometeam <- function(season_n){
+  data_list <- split(Match_season[[season_n]], f = Match_season[[season_n]]$home_team_api_id)
+  for(j in 1:length(data_list)){
+    data_list[[j]] <- data_list[[j]]%>%arrange(date)
+  }
+  return(data_list)
+}
+
+home_0809 <- split_by_hometeam(1)
+home_0910 <- split_by_hometeam(2)
+home_1011 <- split_by_hometeam(3)
+home_1112 <- split_by_hometeam(4)
+home_1213 <- split_by_hometeam(5)
+home_1314 <- split_by_hometeam(6)
+home_1415 <- split_by_hometeam(7)
+home_1516 <- split_by_hometeam(8)
+```
+
+
+split each season by away team
+```{r}
+# function to split each season by home team
+split_by_awayteam <- function(season_n){
+  data_list <- split(Match_season[[season_n]], f = Match_season[[season_n]]$away_team_api_id)
+  for(j in 1:length(data_list)){
+    data_list[[j]] <- data_list[[j]]%>%arrange(date)
+  }
+  return(data_list)
+}
+
+away_0809 <- split_by_awayteam(1)
+away_0910 <- split_by_awayteam(2)
+away_1011 <- split_by_awayteam(3)
+away_1112 <- split_by_awayteam(4)
+away_1213 <- split_by_awayteam(5)
+away_1314 <- split_by_awayteam(6)
+away_1415 <- split_by_awayteam(7)
+away_1516 <- split_by_awayteam(8)
+```
+
+
+Get home team goal differentials and away team goal differentials for the past three games
+```{r}
+last_three_games_extract <- function(home_data, away_data){
+  for(j in 1:length(home_data)){
+    if(nrow(home_data[[j]]) > 3){
+      for(i in 4:nrow(home_data[[j]])){
+        home_id <- toString(home_data[[j]][1,'home_team_api_id'])
+        away_id <- toString(home_data[[j]][i,'away_team_api_id'])
+        k <- which(away_data[[away_id]][,'home_team_api_id'] == home_id)
+        date <- home_data[[j]][k,'date']
+        
+        for(l in 1:length(k)){
+          for(m in 1:length(date)){
+            d <- max(which((as.Date(date[m])-as.Date(home_data[[away_id]][,'date']))>0))
+            d2 <- max(which((as.Date(date[m])-as.Date(away_data[[home_id]][,'date']))>0))
+            if(nrow(home_data[[j]]) > 3 && k[l] > 3 && !is.na(k[1]) && d >= 3 && d2 >= 3){
+              home_data[[j]][i, 'AA1'] <- away_data[[away_id]][k[l]-1, 'away_team_goal']-
+                away_data[[away_id]][k[l]-1, 'home_team_goal']
+              home_data[[j]][i, 'AA2'] <- away_data[[away_id]][k[l]-2, 'away_team_goal']-
+                away_data[[away_id]][k[l]-2, 'home_team_goal']
+              home_data[[j]][i, 'AA3'] <- away_data[[away_id]][k[l]-3, 'away_team_goal']-
+                away_data[[away_id]][k[l]-3, 'home_team_goal']
+              home_data[[j]][i, 'AH1'] <- home_data[[away_id]][d, 'home_team_goal']-
+                home_data[[away_id]][d, 'away_team_goal']
+              home_data[[j]][i, 'AH2'] <- home_data[[away_id]][d-1, 'home_team_goal']-
+                home_data[[away_id]][d-1, 'away_team_goal']
+              home_data[[j]][i, 'AH3'] <- home_data[[away_id]][d-2, 'home_team_goal']-
+                home_data[[away_id]][d-2, 'away_team_goal']
+              
+              home_data[[j]][i, 'HH1'] <- home_data[[home_id]][i-1, 'home_team_goal']-
+                home_data[[home_id]][i-1, 'away_team_goal']
+              home_data[[j]][i, 'HH2'] <- home_data[[home_id]][i-2, 'home_team_goal']-
+                home_data[[home_id]][i-2, 'away_team_goal']
+              home_data[[j]][i, 'HH3'] <- home_data[[home_id]][i-3, 'home_team_goal']-
+                home_data[[home_id]][i-3, 'away_team_goal']
+              home_data[[j]][i, 'HA1'] <- away_data[[home_id]][d2, 'away_team_goal']-
+                away_data[[home_id]][d2, 'home_team_goal']
+              home_data[[j]][i, 'HA2'] <- away_data[[home_id]][d2-1, 'away_team_goal']-
+                away_data[[home_id]][d2-1, 'home_team_goal']
+              home_data[[j]][i, 'HA3'] <- away_data[[home_id]][d2-2, 'away_team_goal']-
+                away_data[[home_id]][d2-2, 'home_team_goal']
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  # declare an empty dataframe
+  df <- NULL
+  
+  # create a datafrme for the season that contains only relevant information
+  for(i in 1:length(home_data)){
+    if(nrow(home_data[[i]])>3){
+      temp <- home_data[[i]]
+      df <- rbind(df, temp)
+    }
+  }
+  df <- df[complete.cases(df),]
+  
+  return(df)
+}
+df_0809 <- last_three_games_extract(home_0809, away_0809)
+df_0910 <- last_three_games_extract(home_0910, away_0910)
+df_1011 <- last_three_games_extract(home_1011, away_1011)
+df_1112 <- last_three_games_extract(home_1112, away_1112)
+df_1213 <- last_three_games_extract(home_1213, away_1213)
+df_1314 <- last_three_games_extract(home_1314, away_1314)
+df_1415 <- last_three_games_extract(home_1415, away_1415)
+df_1516 <- last_three_games_extract(home_1516, away_1516)
+```
+
+Get home team goal differentials and away team goal differentials for the past four games
+```{r}
+last_four_games_extract <- function(home_data, away_data){
+  for(j in 1:length(home_data)){
+    if(nrow(home_data[[j]]) > 4){
+      for(i in 5:nrow(home_data[[j]])){
+        home_id <- toString(home_data[[j]][1,'home_team_api_id'])
+        away_id <- toString(home_data[[j]][i,'away_team_api_id'])
+        k <- which(away_data[[away_id]][,'home_team_api_id'] == home_id)
+        date <- home_data[[j]][k,'date']
+        
+        for(l in 1:length(k)){
+          for(m in 1:length(date)){
+            d <- max(which((as.Date(date[m])-as.Date(home_data[[away_id]][,'date']))>0))
+            d2 <- max(which((as.Date(date[m])-as.Date(away_data[[home_id]][,'date']))>0))
+            if(k[l] > 4 && !is.na(k[1]) && d >= 4 && d2 >= 4){
+              home_data[[j]][i, 'AA1'] <- away_data[[away_id]][k[l]-1, 'away_team_goal']-
+                away_data[[away_id]][k[l]-1, 'home_team_goal']
+              home_data[[j]][i, 'AA2'] <- away_data[[away_id]][k[l]-2, 'away_team_goal']-
+                away_data[[away_id]][k[l]-2, 'home_team_goal']
+              home_data[[j]][i, 'AA3'] <- away_data[[away_id]][k[l]-3, 'away_team_goal']-
+                away_data[[away_id]][k[l]-3, 'home_team_goal']
+              home_data[[j]][i, 'AA4'] <- away_data[[away_id]][k[l]-4, 'away_team_goal']-
+                away_data[[away_id]][k[l]-4, 'home_team_goal']
+              
+              home_data[[j]][i, 'AH1'] <- home_data[[away_id]][d, 'home_team_goal']-
+                home_data[[away_id]][d, 'away_team_goal']
+              home_data[[j]][i, 'AH2'] <- home_data[[away_id]][d-1, 'home_team_goal']-
+                home_data[[away_id]][d-1, 'away_team_goal']
+              home_data[[j]][i, 'AH3'] <- home_data[[away_id]][d-2, 'home_team_goal']-
+                home_data[[away_id]][d-2, 'away_team_goal']
+              home_data[[j]][i, 'AH4'] <- home_data[[away_id]][d-3, 'home_team_goal']-
+                home_data[[away_id]][d-3, 'away_team_goal']          
+              
+              home_data[[j]][i, 'HH1'] <- home_data[[home_id]][i-1, 'home_team_goal']-
+                home_data[[home_id]][i-1, 'away_team_goal']
+              home_data[[j]][i, 'HH2'] <- home_data[[home_id]][i-2, 'home_team_goal']-
+                home_data[[home_id]][i-2, 'away_team_goal']
+              home_data[[j]][i, 'HH3'] <- home_data[[home_id]][i-3, 'home_team_goal']-
+                home_data[[home_id]][i-3, 'away_team_goal']
+              home_data[[j]][i, 'HH4'] <- home_data[[home_id]][i-4, 'home_team_goal']-
+                home_data[[home_id]][i-4, 'away_team_goal']
+              
+              home_data[[j]][i, 'HA1'] <- away_data[[home_id]][d2, 'away_team_goal']-
+                away_data[[home_id]][d2, 'home_team_goal']
+              home_data[[j]][i, 'HA2'] <- away_data[[home_id]][d2-1, 'away_team_goal']-
+                away_data[[home_id]][d2-1, 'home_team_goal']
+              home_data[[j]][i, 'HA3'] <- away_data[[home_id]][d2-2, 'away_team_goal']-
+                away_data[[home_id]][d2-2, 'home_team_goal']
+              home_data[[j]][i, 'HA4'] <- away_data[[home_id]][d2-3, 'away_team_goal']-
+                away_data[[home_id]][d2-3, 'home_team_goal']
+            }
+          }
+        }
+      }
+    }
+  }
+  
+  # declare an empty dataframe
+  df <- NULL
+  
+  # create a datafrme for the season that contains only relevant information
+  for(i in 1:length(home_data)){
+    if(nrow(home_data[[i]])>4){
+      temp <- home_data[[i]]
+      df <- rbind(df, temp)
+    }
+  }
+  df <- df[complete.cases(df),]
+  
+  return(df)
+}
+df4_0809 <- last_four_games_extract(home_0809, away_0809)
+df4_0910 <- last_four_games_extract(home_0910, away_0910)
+df4_1011 <- last_four_games_extract(home_1011, away_1011)
+df4_1112 <- last_four_games_extract(home_1112, away_1112)
+df4_1213 <- last_four_games_extract(home_1213, away_1213)
+df4_1314 <- last_four_games_extract(home_1314, away_1314)
+df4_1415 <- last_four_games_extract(home_1415, away_1415)
+df4_1516 <- last_four_games_extract(home_1516, away_1516)
+```
+
+
+add league position column for past 3 games
+```{r}
+
+for(i in 1:nrow(df_0809)){
+  
+  df_0809[i,'home_pos'] <- lp_0809[which(df_0809[i,"country_id"] 
+                                         ==lp_0809$country & df_0809[i, "stage"] == 
+                                           lp_0809$week & df_0809[i, "home_team_api_id"] == 
+                                           lp_0809$teams), prev.standings]
+  df_0809[i, 'away_pos'] <- lp_0809[which(df_0809[i,"country_id"]
+                                          ==lp_0809$country & df_0809[i, "stage"] == 
+                                            lp_0809$week & df_0809[i, "away_team_api_id"] == 
+                                            lp_0809$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_0809)){
+  df_0809[i,'home_pos'] <- lp_0809[which(df_0809[i,"country_id"] 
+                                         ==lp_0809$country & df_0809[i, "stage"] == 
+                                           lp_0809$week & df_0809[i, "home_team_api_id"] ==
+                                           lp_0809$teams), prev.standings]
+  df_0809[i, 'away_pos'] <- lp_0809[which(df_0809[i,"country_id"] 
+                                          ==lp_0809$country & df_0809[i, "stage"] == 
+                                            lp_0809$week & df_0809[i, "away_team_api_id"] == 
+                                            lp_0809$teams), prev.standings]
+}
+
+
+for(i in 1:nrow(df_0910)){
+  df_0910[i,'home_pos'] <- lp_0910[which(df_0910[i,"country_id"] 
+                                         ==lp_0910$country & df_0910[i, "stage"] == 
+                                           lp_0910$week & df_0910[i, "home_team_api_id"] == 
+                                           lp_0910$teams), prev.standings]
+  df_0910[i, 'away_pos'] <- lp_0910[which(df_0910[i,"country_id"] 
+                                          ==lp_0910$country & df_0910[i, "stage"] == 
+                                            lp_0910$week & df_0910[i, "away_team_api_id"] == 
+                                            lp_0910$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_0910)){
+  df_0910[i,'home_pos'] <- lp_0910[which(df_0910[i,"country_id"] 
+                                         ==lp_0910$country & df_0910[i, "stage"] == 
+                                           lp_0910$week & df_0910[i, "home_team_api_id"] == 
+                                           lp_0910$teams), prev.standings]
+  df_0910[i, 'away_pos'] <- lp_0910[which(df_0910[i,"country_id"] 
+                                          ==lp_0910$country & df_0910[i, "stage"] == 
+                                            lp_0910$week & df_0910[i, "away_team_api_id"] == 
+                                            lp_0910$teams), prev.standings]
+}
+
+
+for(i in 1:nrow(df_1011)){
+  df_1011[i,'home_pos'] <- lp_1011[which(df_1011[i,"country_id"] 
+                                         ==lp_1011$country & df_1011[i, "stage"] == 
+                                           lp_1011$week & df_1011[i, "home_team_api_id"] == 
+                                           lp_1011$teams), prev.standings]
+  df_1011[i, 'away_pos'] <- lp_1011[which(df_1011[i,"country_id"] ==
+                                            lp_1011$country & df_1011[i, "stage"] == 
+                                            lp_1011$week & df_1011[i, "away_team_api_id"] == 
+                                            lp_1011$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1011)){
+  df_1011[i,'home_pos'] <- lp_1011[which(df_1011[i,"country_id"] 
+                                         ==lp_1011$country & df_1011[i, "stage"] == 
+                                           lp_1011$week & df_1011[i, "home_team_api_id"] == 
+                                           lp_1011$teams), prev.standings]
+  df_1011[i, 'away_pos'] <- lp_1011[which(df_1011[i,"country_id"] 
+                                          ==lp_1011$country & df_1011[i, "stage"] == 
+                                            lp_1011$week & df_1011[i, "away_team_api_id"] == 
+                                            lp_1011$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1112)){
+  df_1112[i,'home_pos'] <- lp_1112[which(df_1112[i,"country_id"] 
+                                         ==lp_1112$country & df_1112[i, "stage"] == 
+                                           lp_1112$week & df_1112[i, "home_team_api_id"] ==
+                                           lp_1112$teams), prev.standings]
+  df_1112[i, 'away_pos'] <- lp_1112[which(df_1112[i,"country_id"] 
+                                          ==lp_1112$country & df_1112[i, "stage"] == 
+                                            lp_1112$week & df_1112[i, "away_team_api_id"] == 
+                                            lp_1112$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1112)){
+  df_1112[i,'home_pos'] <- lp_1112[which(df_1112[i,"country_id"] 
+                                         ==lp_1112$country & df_1112[i, "stage"] == 
+                                           lp_1112$week & df_1112[i, "home_team_api_id"] ==
+                                           lp_1112$teams), prev.standings]
+  df_1112[i, 'away_pos'] <- lp_1112[which(df_1112[i,"country_id"] 
+                                          ==lp_1112$country & df_1112[i, "stage"] == 
+                                            lp_1112$week & df_1112[i, "away_team_api_id"] ==
+                                            lp_1112$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1213)){
+  df_1213[i,'home_pos'] <- lp_1213[which(df_1213[i,"country_id"] ==
+                                           lp_1213$country & df_1213[i, "stage"] == 
+                                           lp_1213$week & df_1213[i, "home_team_api_id"] ==
+                                           lp_1213$teams), prev.standings]
+  df_1213[i, 'away_pos'] <- lp_1213[which(df_1213[i,"country_id"] ==
+                                            lp_1213$country & df_1213[i, "stage"] == 
+                                            lp_1213$week & df_1213[i, "away_team_api_id"] ==
+                                            lp_1213$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1213)){
+  df_1213[i,'home_pos'] <- lp_1213[which(df_1213[i,"country_id"] ==
+                                           lp_1213$country & df_1213[i, "stage"] == 
+                                           lp_1213$week & df_1213[i, "home_team_api_id"] ==
+                                           lp_1213$teams), prev.standings]
+  df_1213[i, 'away_pos'] <- lp_1213[which(df_1213[i,"country_id"] ==
+                                            lp_1213$country & df_1213[i, "stage"] == 
+                                            lp_1213$week & df_1213[i, "away_team_api_id"] ==
+                                            lp_1213$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1314)){
+  df_1314[i,'home_pos'] <- lp_1314[which(df_1314[i,"country_id"] ==
+                                           lp_1314$country & df_1314[i, "stage"] == 
+                                           lp_1314$week & df_1314[i, "home_team_api_id"] ==
+                                           lp_1314$teams), prev.standings]
+  df_1314[i, 'away_pos'] <- lp_1314[which(df_1314[i,"country_id"] ==
+                                            lp_1314$country & df_1314[i, "stage"] == 
+                                            lp_1314$week & df_1314[i, "away_team_api_id"] ==
+                                            lp_1314$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1314)){
+  df_1314[i,'home_pos'] <- lp_1314[which(df_1314[i,"country_id"] ==
+                                           lp_1314$country & df_1314[i, "stage"] == 
+                                           lp_1314$week & df_1314[i, "home_team_api_id"] ==
+                                           lp_1314$teams), prev.standings]
+  df_1314[i, 'away_pos'] <- lp_1314[which(df_1314[i,"country_id"] ==
+                                            lp_1314$country & df_1314[i, "stage"] == 
+                                            lp_1314$week & df_1314[i, "away_team_api_id"] ==
+                                            lp_1314$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1415)){
+  df_1415[i,'home_pos'] <- lp_1415[which(df_1415[i,"country_id"] ==
+                                           lp_1415$country & df_1415[i, "stage"] == 
+                                           lp_1415$week & df_1415[i, "home_team_api_id"] ==
+                                           lp_1415$teams), prev.standings]
+  df_1415[i, 'away_pos'] <- lp_1415[which(df_1415[i,"country_id"] ==
+                                            lp_1415$country & df_1415[i, "stage"] == 
+                                            lp_1415$week & df_1415[i, "away_team_api_id"] ==
+                                            lp_1415$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1415)){
+  df_1415[i,'home_pos'] <- lp_1415[which(df_1415[i,"country_id"] ==
+                                           lp_1415$country & df_1415[i, "stage"] == 
+                                           lp_1415$week & df_1415[i, "home_team_api_id"] ==
+                                           lp_1415$teams), prev.standings]
+  df_1415[i, 'away_pos'] <- lp_1415[which(df_1415[i,"country_id"] ==
+                                            lp_1415$country & df_1415[i, "stage"] == 
+                                            lp_1415$week & df_1415[i, "away_team_api_id"] ==
+                                            lp_1415$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1516)){
+  df_1516[i,'home_pos'] <- lp_1516[which(df_1516[i,"country_id"] ==
+                                           lp_1516$country & df_1516[i, "stage"] == 
+                                           lp_1516$week & df_1516[i, "home_team_api_id"] ==
+                                           lp_1516$teams), prev.standings]
+  df_1516[i, 'away_pos'] <- lp_1516[which(df_1516[i,"country_id"] ==
+                                            lp_1516$country & df_1516[i, "stage"] == 
+                                            lp_1516$week & df_1516[i, "away_team_api_id"] ==
+                                            lp_1516$teams), prev.standings]
+}
+
+for(i in 1:nrow(df_1516)){
+  df_1516[i,'home_pos'] <- lp_1516[which(df_1516[i,"country_id"] ==
+                                           lp_1516$country & df_1516[i, "stage"] == 
+                                           lp_1516$week & df_1516[i, "home_team_api_id"] ==
+                                           lp_1516$teams), prev.standings]
+  df_1516[i, 'away_pos'] <- lp_1516[which(df_1516[i,"country_id"] ==
+                                            lp_1516$country & df_1516[i, "stage"] == 
+                                            lp_1516$week & df_1516[i, "away_team_api_id"] ==
+                                            lp_1516$teams), prev.standings]
+}
+
+
+```
+
+adding home and away team's league position for past 4 game data set
+```{r}
+
+for(i in 1:nrow(df4_0809)){
+  
+  df4_0809[i,'home_pos'] <- lp_0809[which(df4_0809[i,"country_id"] ==
+                                            lp_0809$country & df4_0809[i, "stage"] == 
+                                            lp_0809$week & df4_0809[i, "home_team_api_id"] ==
+                                            lp_0809$teams), prev.standings]
+  df4_0809[i, 'away_pos'] <- lp_0809[which(df4_0809[i,"country_id"] ==
+                                             lp_0809$country & df4_0809[i, "stage"] ==
+                                             lp_0809$week & df4_0809[i, "away_team_api_id"] ==
+                                             lp_0809$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_0809)){
+  df4_0809[i,'home_pos'] <- lp_0809[which(df4_0809[i,"country_id"] ==
+                                            lp_0809$country & df4_0809[i, "stage"] == 
+                                            lp_0809$week & df4_0809[i, "home_team_api_id"] ==
+                                            lp_0809$teams), prev.standings]
+  df4_0809[i, 'away_pos'] <- lp_0809[which(df4_0809[i,"country_id"] ==
+                                             lp_0809$country & df4_0809[i, "stage"] ==
+                                             lp_0809$week & df4_0809[i, "away_team_api_id"] ==
+                                             lp_0809$teams), prev.standings]
+}
+
+
+for(i in 1:nrow(df4_0910)){
+  df4_0910[i,'home_pos'] <- lp_0910[which(df4_0910[i,"country_id"] ==
+                                            lp_0910$country & df4_0910[i, "stage"] == 
+                                            lp_0910$week & df4_0910[i, "home_team_api_id"] ==
+                                            lp_0910$teams), prev.standings]
+  df4_0910[i, 'away_pos'] <- lp_0910[which(df4_0910[i,"country_id"] ==
+                                             lp_0910$country & df4_0910[i, "stage"] ==
+                                             lp_0910$week & df4_0910[i, "away_team_api_id"] ==
+                                             lp_0910$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_0910)){
+  df4_0910[i,'home_pos'] <- lp_0910[which(df4_0910[i,"country_id"] ==
+                                            lp_0910$country & df4_0910[i, "stage"] == 
+                                            lp_0910$week & df4_0910[i, "home_team_api_id"] ==
+                                            lp_0910$teams), prev.standings]
+  df4_0910[i, 'away_pos'] <- lp_0910[which(df4_0910[i,"country_id"] ==
+                                             lp_0910$country & df4_0910[i, "stage"] ==
+                                             lp_0910$week & df4_0910[i, "away_team_api_id"] ==
+                                             lp_0910$teams), prev.standings]
+}
+
+
+for(i in 1:nrow(df4_1011)){
+  df4_1011[i,'home_pos'] <- lp_1011[which(df4_1011[i,"country_id"] ==
+                                            lp_1011$country & df4_1011[i, "stage"] == 
+                                            lp_1011$week & df4_1011[i, "home_team_api_id"] ==
+                                            lp_1011$teams), prev.standings]
+  df4_1011[i, 'away_pos'] <- lp_1011[which(df4_1011[i,"country_id"] ==
+                                             lp_1011$country & df4_1011[i, "stage"] ==
+                                             lp_1011$week & df4_1011[i, "away_team_api_id"] ==
+                                             lp_1011$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1011)){
+  df4_1011[i,'home_pos'] <- lp_1011[which(df4_1011[i,"country_id"] ==
+                                            lp_1011$country & df4_1011[i, "stage"] == 
+                                            lp_1011$week & df4_1011[i, "home_team_api_id"] ==
+                                            lp_1011$teams), prev.standings]
+  df4_1011[i, 'away_pos'] <- lp_1011[which(df4_1011[i,"country_id"] ==
+                                             lp_1011$country & df4_1011[i, "stage"] ==
+                                             lp_1011$week & df4_1011[i, "away_team_api_id"] ==
+                                             lp_1011$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1112)){
+  df4_1112[i,'home_pos'] <- lp_1112[which(df4_1112[i,"country_id"]
+                                          ==lp_1112$country & df4_1112[i, "stage"] == 
+                                            lp_1112$week & df4_1112[i, "home_team_api_id"] ==
+                                            lp_1112$teams), prev.standings]
+  df4_1112[i, 'away_pos'] <- lp_1112[which(df4_1112[i,"country_id"] ==
+                                             lp_1112$country & df4_1112[i, "stage"] ==
+                                             lp_1112$week & df4_1112[i, "away_team_api_id"] ==
+                                             lp_1112$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1112)){
+  df4_1112[i,'home_pos'] <- lp_1112[which(df4_1112[i,"country_id"] ==
+                                            lp_1112$country & df4_1112[i, "stage"] == 
+                                            lp_1112$week & df4_1112[i, "home_team_api_id"] ==
+                                            lp_1112$teams), prev.standings]
+  df4_1112[i, 'away_pos'] <- lp_1112[which(df4_1112[i,"country_id"] ==
+                                             lp_1112$country & df4_1112[i, "stage"] ==
+                                             lp_1112$week & df4_1112[i, "away_team_api_id"] ==
+                                             lp_1112$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1213)){
+  df4_1213[i,'home_pos'] <- lp_1213[which(df4_1213[i,"country_id"] ==
+                                            lp_1213$country & df4_1213[i, "stage"] == 
+                                            lp_1213$week & df4_1213[i, "home_team_api_id"] ==
+                                            lp_1213$teams), prev.standings]
+  df4_1213[i, 'away_pos'] <- lp_1213[which(df4_1213[i,"country_id"] ==
+                                             lp_1213$country & df4_1213[i, "stage"] ==
+                                             lp_1213$week & df4_1213[i, "away_team_api_id"] ==
+                                             lp_1213$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1213)){
+  df4_1213[i,'home_pos'] <- lp_1213[which(df4_1213[i,"country_id"] ==
+                                            lp_1213$country & df4_1213[i, "stage"] == 
+                                            lp_1213$week & df4_1213[i, "home_team_api_id"] ==
+                                            lp_1213$teams), prev.standings]
+  df4_1213[i, 'away_pos'] <- lp_1213[which(df4_1213[i,"country_id"] ==
+                                             lp_1213$country & df4_1213[i, "stage"] ==
+                                             lp_1213$week & df4_1213[i, "away_team_api_id"] ==
+                                             lp_1213$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1314)){
+  df4_1314[i,'home_pos'] <- lp_1314[which(df4_1314[i,"country_id"] ==
+                                            lp_1314$country & df4_1314[i, "stage"] == 
+                                            lp_1314$week & df4_1314[i, "home_team_api_id"] ==
+                                            lp_1314$teams), prev.standings]
+  df4_1314[i, 'away_pos'] <- lp_1314[which(df4_1314[i,"country_id"] ==
+                                             lp_1314$country & df4_1314[i, "stage"] ==
+                                             lp_1314$week & df4_1314[i, "away_team_api_id"] ==
+                                             lp_1314$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1314)){
+  df4_1314[i,'home_pos'] <- lp_1314[which(df4_1314[i,"country_id"] ==
+                                            lp_1314$country & df4_1314[i, "stage"] == 
+                                            lp_1314$week & df4_1314[i, "home_team_api_id"] ==
+                                            lp_1314$teams), prev.standings]
+  df4_1314[i, 'away_pos'] <- lp_1314[which(df4_1314[i,"country_id"] ==
+                                             lp_1314$country & df4_1314[i, "stage"] ==
+                                             lp_1314$week & df4_1314[i, "away_team_api_id"] ==
+                                             lp_1314$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1415)){
+  df4_1415[i,'home_pos'] <- lp_1415[which(df4_1415[i,"country_id"] ==
+                                            lp_1415$country & df4_1415[i, "stage"] == 
+                                            lp_1415$week & df4_1415[i, "home_team_api_id"] ==
+                                            lp_1415$teams), prev.standings]
+  df4_1415[i, 'away_pos'] <- lp_1415[which(df4_1415[i,"country_id"] ==
+                                             lp_1415$country & df4_1415[i, "stage"] ==
+                                             lp_1415$week & df4_1415[i, "away_team_api_id"] ==
+                                             lp_1415$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1415)){
+  df4_1415[i,'home_pos'] <- lp_1415[which(df4_1415[i,"country_id"] ==
+                                            lp_1415$country & df4_1415[i, "stage"] == 
+                                            lp_1415$week & df4_1415[i, "home_team_api_id"] ==
+                                            lp_1415$teams), prev.standings]
+  df4_1415[i, 'away_pos'] <- lp_1415[which(df4_1415[i,"country_id"] ==
+                                             lp_1415$country & df4_1415[i, "stage"] ==
+                                             lp_1415$week & df4_1415[i, "away_team_api_id"] ==
+                                             lp_1415$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1516)){
+  df4_1516[i,'home_pos'] <- lp_1516[which(df4_1516[i,"country_id"] ==
+                                            lp_1516$country & df4_1516[i, "stage"] == 
+                                            lp_1516$week & df4_1516[i, "home_team_api_id"] ==
+                                            lp_1516$teams), prev.standings]
+  df4_1516[i, 'away_pos'] <- lp_1516[which(df4_1516[i,"country_id"] ==
+                                             lp_1516$country & df4_1516[i, "stage"] ==
+                                             lp_1516$week & df4_1516[i, "away_team_api_id"] ==
+                                             lp_1516$teams), prev.standings]
+}
+
+for(i in 1:nrow(df4_1516)){
+  df4_1516[i,'home_pos'] <- lp_1516[which(df4_1516[i,"country_id"] ==
+                                            lp_1516$country & df4_1516[i, "stage"] == 
+                                            lp_1516$week & df4_1516[i, "home_team_api_id"] ==
+                                            lp_1516$teams), prev.standings]
+  df4_1516[i, 'away_pos'] <- lp_1516[which(df4_1516[i,"country_id"] ==
+                                             lp_1516$country & df4_1516[i, "stage"] ==
+                                             lp_1516$week & df4_1516[i, "away_team_api_id"] ==
+                                             lp_1516$teams), prev.standings]
+}
+
+
+```
+
+
+Create result columns for current games
+```{r}
+add_results <- function(df){
+  diff <- df$home_team_goal-df$away_team_goal
+  # create result column for result of each game
+  df$result <- ifelse(diff > 0, 1, ifelse(diff < 0, -1, 0))
+
+  return(df)
+}
+
+
+df_0809 <- add_results(df_0809)
+df_0910 <- add_results(df_0910)
+df_1011 <- add_results(df_1011)
+df_1112 <- add_results(df_1112)
+df_1213 <- add_results(df_1213)
+df_1314 <- add_results(df_1314)
+df_1415 <- add_results(df_1415)
+df_1516 <- add_results(df_1516)
+
+df4_0809 <- add_results(df4_0809)
+df4_0910 <- add_results(df4_0910)
+df4_1011 <- add_results(df4_1011)
+df4_1112 <- add_results(df4_1112)
+df4_1213 <- add_results(df4_1213)
+df4_1314 <- add_results(df4_1314)
+df4_1415 <- add_results(df4_1415)
+df4_1516 <- add_results(df4_1516)
+
+
+```
+
+
+
+Combine data for each season to one dataframe
+```{r}
+df <- rbind(df_0809, df_0910, df_1011, df_1112, df_1213, df_1314, df_1415, df_1516)
+df4 <- rbind(df4_0809, df4_0910, df4_1011, df4_1112, df4_1213, df4_1314, df4_1415, df4_1516)
+df$class <- relevel(as.factor(df$result), ref = "1")
+df4$class <- relevel(as.factor(df4$result), ref = "1")
+```
+
+
+```{r}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+# Reference: http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/
+
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+
+
+Descriptive graph for data 
+```{r}
+png('data_description.png')
+p1 <- ggplot(data=df, aes(x = class, y = AA1))+geom_boxplot(color='red') + 
+  labs(title = "Boxplot for AA1", x = "current game outcome", y = "previous goal differentce")
+p2 <- ggplot(data=df, aes(x = class, y = AH1))+geom_boxplot(color='orange') +
+  labs(title = "Boxplot for AH1", x = "current game outcome", y = "previous goal differentce")
+p3 <- ggplot(data=df, aes(x = class, y = HH1))+geom_boxplot(color='blue') +
+  labs(title = "Boxplot for HH1", x = "current game outcome", y = "previous goal differentce")
+p4 <- ggplot(data=df, aes(x = class, y = HA1))+geom_boxplot(color='green') +
+  labs(title = "Boxplot for HA1", x = "current game outcome", y = "previous goal differentce")
+
+multiplot(p1, p2, p3, p4, cols=2)
+dev.off()
+```
+
+
+To see the baseline of the prediction
+```{r}
+homewin_freq <- 9896/(9896+5352+6148)
+awaywin_freq <- 6148/(9896+5352+6148)
+draw_freq <- 5352/(9896+5352+6148)
+
+freq <- round(c(homewin_freq, draw_freq, awaywin_freq),3)
+  
+data_freq <- data.frame(outcome = c("home win", "draw", "away win"), freq = freq) 
+ggplot(data=data_freq, aes(x=outcome, y=freq, fill=outcome)) +
+  geom_bar(position='dodge', stat='identity') +
+  geom_text(aes(label=freq), position=position_dodge(width=0.9), vjust=-0.25) + 
+  labs(title = "Proportion of Each Outcomes", x = "outcome", y = "proportion") 
+ggsave('proportion_outcomes.png')
+
+```
+
+
+
+Try with multinomial logistic regression model (nnet package) for df (past 3 games)
+```{r}
+set.seed(222)
+n <- round(nrow(df)*.2)
+
+# subset test dataset by random sampling 
+test_df <- sample_n(df, n)
+
+# create a training set
+training_df<-setdiff(df, test_df)
+
+
+
+# fit the model
+# result ~ result in previous games
+test <- multinom(class ~ AA1 + AA2 + AA3 + AH1 + AH2 + AH3 + HH1 + HH2 + HH3 + HA1 + HA2 + 
+                   HA3 + home_pos + away_pos, data = training_df)
+
+# see the coefficients
+summary(test)
+
+# calculate p values for "test"
+z <- summary(test)$coefficients/summary(test)$standard.errors
+p <- (1 - pnorm(abs(z), 0, 1)) * 2
+p
+
+# accuracy of the prediction for "test"
+accur_logistic_df <- sum(predict(test, test_df) == test_df$class)/nrow(test_df)
+accur_logistic_df
+
+
+# confusion matrix
+m1 <- confusionMatrix(predict(test, test_df), test_df$class, dnn = 
+                        c("Logistic Prediction with 3 Past Games", "True Result"))
+round(m1$table/nrow(test_df), 3)
+```
+
+
+Try with multinomial logistic regression model (nnet package) for df4 (past 4 games)
+```{r}
+set.seed(222)
+df4$class <- relevel(as.factor(df4$result), ref = "1")
+n <- round(nrow(df4)*.2)
+
+# subset test dataset by random sampling 
+test_df4 <- sample_n(df4, n)
+
+# create a training set
+training_df4<-setdiff(df4, test_df4)
+
+
+
+# fit the model
+# result ~ result in previous games
+test <- multinom(class ~ AA1 + AA2 + AA3 + AA4 + AH1 + AH2 + AH3 + AH4 + HH1 + HH2 + HH3 + HH4 
+                 + HA1 + HA2 + HA3 + HA4 + home_pos + away_pos, data = training_df4)
+
+# report the coefficients
+summary(test)
+
+# calculate p values for "test"
+z <- summary(test)$coefficients/summary(test)$standard.errors
+p <- (1 - pnorm(abs(z), 0, 1)) * 2
+p
+
+# accuracy of the prediction for "test"
+accur_logistic_df4 <- sum(predict(test, test_df4) == test_df4$class)/nrow(test_df4)
+accur_logistic_df4
+
+# confusion matrix
+m5 <- confusionMatrix(predict(test, test_df4), test_df4$class, dnn = 
+                        c("Logistic Prediction with Past 4 Games", "True Result"))
+round(m5$table/nrow(test_df4), 3)
+
+```
+
+
+
+Try with multinomial logistic regression model with cross validation (glmnet package)-3 past games
+```{r} 
+set.seed(222)
+n <- round(nrow(df)*.2)
+
+test_df <- sample_n(df, n)
+# create a training set
+training_df<-setdiff(df, test_df)
+# difference ~ result in previous games
+x2 <- as.matrix(training_df[,9:22])
+y2 <- as.matrix(training_df[,23])
+
+# fit the model with cross validation
+cvfit2=cv.glmnet(x2, y2, family="multinomial", type.multinomial = "grouped", parallel = TRUE) 
+
+# do prediction for the validation set
+validation_set2 = as.matrix(test_df[,9:22])
+validation_label2 = test_df[,23]
+predict_label2 <- predict(cvfit2, newx = validation_set2, s = "lambda.min", type = "class")
+
+# accuracy of the prediction
+accur_cv_df <- sum(predict_label2 == validation_label2)/length(predict_label2)
+accur_cv_df
+
+# confusion matrix
+library(caret)
+m2 <- confusionMatrix(predict_label2, validation_label2, dnn = 
+                        c("Logistic(cv) Prediction with 3 Past Games", "True Result"))
+round(m2$table/4259, 3)
+```
+
+
+Try with multinomial logistic regression model with cross validation (glmnet package)-past 4 games
+```{r} 
+set.seed(222)
+n <- round(nrow(df4)*.2)
+
+test_df4 <- sample_n(df4, n)
+
+# create a training set
+training_df4<-setdiff(df4, test_df4)
+# difference ~ result in previous games
+x2 <- as.matrix(training_df4[,c(9:26)])
+y2 <- as.matrix(training_df4[,28])
+
+# fit the model with cross validation
+cvfit2=cv.glmnet(x2, y2, family="multinomial", type.multinomial = "grouped", parallel = TRUE) 
+
+# do prediction for the validation set
+validation_set2 = as.matrix(test_df4[,c(9:26)])
+validation_label2 = test_df4[,28]
+predict_label2 <- predict(cvfit2, newx = validation_set2, s = "lambda.min", type = "class")
+
+# accuracy of the prediction
+accur_cv_df4 <- sum(predict_label2 == validation_label2)/length(predict_label2)
+accur_cv_df4
+
+# confusion matrix
+library(caret)
+m2_2 <- confusionMatrix(predict_label2, validation_label2, dnn = 
+                          c("Logistic(cv) Prediction with 4 Past Games", "True Result"))
+round(m2_2$table/4259, 3)
+```
+
+
+Run Random Forest with 3 past games
+```{r}
+library(randomForest)
+set.seed(222)
+n <- round(nrow(df)*.2)
+
+test_df <- sample_n(df, n)
+
+# create a training set
+training_df<-setdiff(df, test_df)
+
+# fit the model
+model <- randomForest(class ~ AA1 + AA2 + AA3 + AH1 + AH2 + AH3 + HH1 + HH2 + HH3 + HA1 + HA2 
+                      + HA3 + home_pos+ away_pos,  data = training_df, ntree = 700, 
+                      importance = TRUE)
+
+# calculate the prediction accuracy
+accur_rf_df <- sum(predict(model, newdata = test_df) == test_df$class)/nrow(test_df)
+accur_rf_df
+
+# confusion matrix
+m3 <- confusionMatrix(predict(model, newdata = test_df), test_df$class, dnn = 
+                        c("RF Prediction with 3 Past Games", "True Result"))
+round(m3$table/nrow(test_df), 3)
+
+```
+
+
+Run Random Forest with past 4 games
+```{r}
+library(randomForest)
+set.seed(222)
+n <- round(nrow(df4)*.2)
+df4$class <- relevel(as.factor(df4$result), ref = "1")
+
+test_df4 <- sample_n(df4, n)
+
+# create a training set
+training_df4<-setdiff(df4, test_df4)
+
+# fitting model
+model <- randomForest(class ~ AA1 + AA2 + AA3 + AA4 + AH1 + AH2 + AH3 + AH4 + HH1 + HH2 + HH3 
+                      + HH4 + HA1 + HA2 + HA3 + HA4 + home_pos + away_pos, 
+                      data = training_df4, ntree = 700, importance = TRUE)
+
+# calculate the prediction accuracy
+accur_rf_df4 <- sum(predict(model, newdata = test_df4) == test_df4$class)/nrow(test_df4)
+accur_rf_df4
+
+# confusion matrix
+m3 <- confusionMatrix(predict(model, newdata = test_df4), test_df4$class, dnn = 
+                        c("RF Prediction with 4 Past Games", "True Result"))
+round(m3$table/nrow(test_df4), 3)
+```
+
+
+Random Forest with past 3 games features--Parameter Tunning & graph
+```{r}
+trees <- c(100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100)
+
+accur_list <- NULL
+
+
+for (i in trees) {
+  model <- randomForest(class ~ AA1 + AA2 + AA3 + AA4 + AH1 + AH2 + AH3 + AH4 + HH1 + HH2 + HH3 
+                        + HH4 + HA1 + HA2 + HA3 + HA4 + home_pos + away_pos, 
+                        data = training_df4, ntree = i, importance = TRUE)
+  accur <- sum(predict(model, newdata = test_df4) == test_df4$class)/nrow(test_df4)
+  accur_list <- c(accur_list, accur)
+  }
+
+accur_list <- round(accur_list, 3)
+
+accur_data <- as.data.frame(cbind(trees, accur_list))
+ggplot(data=accur_data, aes(x = trees, y = accur_list))+geom_line(colour = "red")+
+  labs(title = "Tuning Parameter for Random Forest", 
+       x = "number of trees", y = "prediction accuracy") + 
+  geom_text(aes(trees, accur_list, label = accur_list, vjust = -1), size=2)
+ggsave("tuning_RF.png")
+
+```
+
+
+K-NN classification with past 3 games
+```{r}
+library(class)
+set.seed(222)
+n <- round(nrow(df)*.2)
+df$class <- relevel(as.factor(df$result), ref = "1")
+
+test <- sample_n(df, n)
+# create a training set
+training<-setdiff(df, test)
+
+test.def <- test$class
+training.def <- training$class
+
+test <- test[,c(9:22)]
+training <- training[,c(9:22)]
+
+# fitting model
+knn.190 <- knn(training, test, training.def, k = 190)
+
+# prediction accuracy
+acc.knn.190.df <- sum(test.def == knn.190)/n
+acc.knn.190.df
+
+# confusion matrix
+library(caret)
+m4 <- confusionMatrix(knn.190, test.def, dnn = 
+                        c("KNN Prediction with Past 3 Games", "True Result"))
+round(m4$table/n, 3)
+```
+
+
+KNN with past 3 games--Parameter Tunning & graph
+```{r}
+k <- seq(10, 200, 10)
+accur_KNN <- NULL
+
+
+for (i in k){
+  knn_model <- knn(training, test, training.def, k = i)
+  acc <- sum(test.def == knn_model)/n
+  accur_KNN <- c(accur_KNN, acc)
+}
+
+accur_KNN <- round(accur_KNN, 3)
+
+KNN_data <- as.data.frame(cbind(k, accur_KNN))
+
+ggplot(data=KNN_data, aes(x = k, y = accur_KNN))+geom_line(colour = "#000099")+
+  labs(title = "Tuning Parameter for KNN model", x = "parameter k", y = "prediction accuracy") + 
+  geom_text(aes(k, accur_KNN, label = accur_KNN, vjust = -1), size=2)
+ggsave("tuning_KNN.png")
+```
+
+
+
+K-NN classification with past 4 games
+```{r}
+set.seed(222)
+n <- round(nrow(df4)*.2)
+df4$class <- relevel(as.factor(df4$result), ref = "1")
+
+test <- sample_n(df4, n)
+# create a training set
+training<-setdiff(df4, test)
+
+test.def <- test$class
+training.def <- training$class
+
+test <- test[,c(9:26)]
+training <- training[,c(9:26)]
+
+# fitting model
+knn.190 <- knn(training, test, training.def, k = 190)
+
+# prediction accuracy
+acc.knn.190.df4 <- sum(test.def == knn.190)/n
+acc.knn.190.df4
+
+m5 <- confusionMatrix(knn.190, test.def, dnn = 
+                        c("KNN Prediction with Past 4 Games", "True Result"))
+round(m5$table/n, 3)
+```
+
+
+Try with multinomial logistic regression model (nnet package) for df--with balance data
+```{r}
+set.seed(222)
+
+# balanced sample (baseline become 33%)
+hw <- df[df$result == 1,]
+dr <- df[df$result == 0,]
+aw <- df[df$result == -1,]
+
+tr_hw <- sample_n(hw, 4500)
+tr_dr <- sample_n(dr, 4500)
+tr_aw <- sample_n(aw, 4500)
+tr_bal <- rbind(tr_hw, tr_dr, tr_aw)
+
+tst_hw <- sample_n(setdiff(hw, tr_hw),800)
+tst_dr <- sample_n(setdiff(dr, tr_dr), 800)
+tst_aw <- sample_n(setdiff(aw, tr_aw), 800)
+tst_bal <- rbind(tst_hw, tst_dr, tst_aw)
+
+
+# fit the model with balanced dataset
+test_bal <- multinom(class ~ AA1 + AA2 + AA3 + AH1 + AH2 + AH3 + HH1 + HH2 + HH3 + HA1 + HA2 + 
+                       HA3+ home_pos + away_pos, data = tr_bal)
+
+# prediction accuracy
+accur_bal <- sum(predict(test_bal, tst_bal) == tst_bal$class)/nrow(tst_bal)
+accur_bal
+
+```
+
+
+draw confusion matrix for balanced data
+```{r}
+library(caret)
+m <- confusionMatrix(predict(test_bal, tst_bal), tst_bal$class, dnn = 
+                       c("Prediction with Balanced Dataset", "True Result"))
+round(m$table/2400, 3)
+```
+
+
+Naive Bayes model with 3 past games
+```{r}
+library(e1071)
+set.seed(222)
+df$class <- relevel(as.factor(df$result), ref = "1")
+n <- round(nrow(df)*.2)
+
+test_df <- sample_n(df, n)
+
+# create a training set
+training_df<-setdiff(df, test_df)
+training_df <- training_df[, c(9:22, 24)]
+test_df <- test_df[, c(9:22, 24)]
+
+classifier <-  naiveBayes(class~., data = training_df)
+
+prediction <- predict(classifier, test_df[,c(1:14)])
+
+accur <- sum(prediction == test_df$class)/nrow(test_df)
+accur
+
+```
+
+
+
+Naive Bayes model with 4 past games
+```{r}
+library(e1071)
+set.seed(222)
+df4$class <- relevel(as.factor(df4$result), ref = "1")
+
+n <- round(nrow(df4)*.2)
+
+test_df4 <- sample_n(df4, n)
+
+# create a training set
+training_df4<-setdiff(df4, test_df4)
+training_df4 <- training_df4[, c(9:26, 28)]
+test_df4 <- test_df4[, c(9:26, 28)]
+
+classifier <-  naiveBayes(class~., data = training_df4)
+
+prediction <- predict(classifier, test_df4[,c(1:18)])
+
+accur <- sum(prediction == test_df4$class)/nrow(test_df4)
+accur
+
+```
+
+
+Prediction Accuracy on validation set for all models
+```{r}
+model_name <- c("logistic", "logistic", "logistic with cv", "logistic with cv", "random forest", 
+                "random forest", "KNN", "KNN")
+score <- round(c(accur_logistic_df, accur_logistic_df4, accur_cv_df, accur_cv_df4, accur_rf_df, 
+                 accur_rf_df4, acc.knn.190.df, acc.knn.190.df4), 4)
+type <- c("past 3 games", "past 4 games", "past 3 games", "past 4 games", "past 3 games", 
+          "past 4 games", "past 3 games", "past 4 games")
+
+predict_data <- data.frame(model=model_name, accuracy=score, type=type)
+
+ggplot(data=predict_data, aes(x=model, y=accuracy, fill=type)) +
+  geom_bar(position='dodge', stat='identity') +
+  geom_text(aes(label=accuracy), position=position_dodge(width=0.9), vjust=-0.25) + 
+  labs(title = "Prediction Accuracy on Validation Set", x = "model", y = "prediction accuracy") +
+  geom_hline(yintercept=0.46, color='red') + 
+  annotate("text", x=0.7, y=0.48,label='baseline: 0.46', size=3)
+ggsave("predict_accur_all.png")
+```
+
